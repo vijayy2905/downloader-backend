@@ -26,19 +26,20 @@ def get_spotify_track_names(url):
         )
         sp = spotipy.Spotify(auth_manager=auth_manager)
 
-        if "playlist" in url:
+                if "playlist" in url:
             playlist_id = url.split("playlist/")[1].split("?")[0]
-            results = sp.playlist_items(playlist_id)
-            tracks = results['items']
+            results = sp.playlist_tracks(playlist_id)
+            tracks = results.get('items', [])
             while results.get('next'):
                 results = sp.next(results)
-                tracks.extend(results['items'])
+                tracks.extend(results.get('items', []))
             
             for item in tracks:
                 track = item.get('track')
                 if track and track.get('name'):
                     artists = ", ".join([a['name'] for a in track['artists']])
                     track_queries.append(f"{track['name']} {artists}")
+
 
         elif "track" in url:
             track_id = url.split("track/")[1].split("?")[0]
