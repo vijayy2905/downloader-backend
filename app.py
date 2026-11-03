@@ -40,7 +40,6 @@ def get_spotify_track_names(url):
                     artists = ", ".join([a['name'] for a in track['artists']])
                     track_queries.append(f"{track['name']} {artists}")
 
-
         elif "track" in url:
             track_id = url.split("track/")[1].split("?")[0]
             track = sp.track(track_id)
