@@ -50,37 +50,31 @@ def get_spotify_track_names(url):
 
 
 def download_audio_stream(query, save_path):
-    """Downloads audio directly via open music API gateways, bypassing cloud IP blocks."""
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    
-    # Primary Gateway: Direct MP3 Music APIs (Zero IP Blocking)
+    """Downloads audio stream across multiple high-availability music gateways."""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     encoded_query = requests.utils.quote(query)
-    music_apis = [
-        f"https://saavn.dev/api/search/songs?query={encoded_query}",
-        f"https://saavn.me/search/songs?query={encoded_query}",
-        f"https://jiosaavn-api-private-us.vercel.app/search/songs?query={encoded_query}"
-    ]
 
-    for api_url in music_apis:
+    # Engine 1: JioSaavn / Indian Music API Gateway
+    saavn_apis = [
+        f"https://saavn.dev/api/search/songs?query={encoded_query}",
+        f"https://saavn.me/search/songs?query={encoded_query}"
+    ]
+    for api_url in saavn_apis:
         try:
-            res = requests.get(api_url, headers=headers, timeout=6)
+            res = requests.get(api_url, headers=headers, timeout=5)
             if res.status_code == 200:
                 data = res.json()
                 results = data.get('data', {}).get('results', []) or data.get('results', [])
                 if results:
                     download_urls = results[0].get('downloadUrl', [])
                     target_url = None
-                    
-                    if isinstance(download_urls, list):
-                        for item in reversed(download_urls):
-                            if isinstance(item, dict) and 'url' in item:
-                                target_url = item['url']
-                                break
+                    if isinstance(download_urls, list) and len(download_urls) > 0:
+                        target_url = download_urls[-1].get('url') if isinstance(download_urls[-1], dict) else download_urls[-1]
                     elif isinstance(download_urls, str):
                         target_url = download_urls
 
                     if target_url:
-                        audio_res = requests.get(target_url, headers=headers, stream=True, timeout=20)
+                        audio_res = requests.get(target_url, headers=headers, stream=True, timeout=15)
                         if audio_res.status_code == 200:
                             with open(save_path, 'wb') as f:
                                 for chunk in audio_res.iter_content(chunk_size=8192):
@@ -88,29 +82,58 @@ def download_audio_stream(query, save_path):
                                         f.write(chunk)
                             return True
         except Exception as e:
-            print(f"Music API endpoint failed ({api_url}):", e)
+            print("Saavn API failed:", e)
 
-    # Fallback Gateway: Piped API Network (YouTube Proxy)
+    # Engine 2: Invidious Proxy Network
+    invidious_instances = [
+        "https://inv.verified.sh",
+        "https://invidious.nerdvpn.de",
+        "https://invidious.drgns.space"
+    ]
+    for inv_instance in invidious_instances:
+        try:
+            search_res = requests.get(f"{inv_instance}/api/v1/search?q={encoded_query}&type=video", timeout=5)
+            if search_res.status_code == 200:
+                items = search_res.json()
+                if isinstance(items, list) and len(items) > 0:
+                    video_id = items[0].get("videoId")
+                    if video_id:
+                        vid_res = requests.get(f"{inv_instance}/api/v1/videos/{video_id}", timeout=5)
+                        if vid_res.status_code == 200:
+                            adaptive_formats = vid_res.json().get("adaptiveFormats", [])
+                            audio_formats = [f for f in adaptive_formats if "audio" in f.get("type", "")]
+                            if audio_formats:
+                                stream_url = audio_formats[0].get("url")
+                                audio_res = requests.get(stream_url, headers=headers, stream=True, timeout=15)
+                                if audio_res.status_code == 200:
+                                    with open(save_path, 'wb') as f:
+                                        for chunk in audio_res.iter_content(chunk_size=8192):
+                                            if chunk:
+                                                f.write(chunk)
+                                    return True
+        except Exception as inv_err:
+            print("Invidious failed:", inv_err)
+
+    # Engine 3: Piped API Network
     piped_instances = [
         "https://api.piped.private.coffee",
-        "https://pipedapi.kavin.rocks",
-        "https://pipedapi.drgns.space"
+        "https://pipedapi.kavin.rocks"
     ]
-    for instance in piped_instances:
+    for p_instance in piped_instances:
         try:
-            s_res = requests.get(f"{instance}/search", params={"q": query, "filter": "music_songs"}, timeout=5)
+            s_res = requests.get(f"{p_instance}/search", params={"q": query, "filter": "music_songs"}, timeout=5)
             if s_res.status_code == 200:
                 items = s_res.json().get("items", [])
                 if items:
                     v_url = items[0].get("url", "")
                     if "v=" in v_url:
                         video_id = v_url.split("v=")[-1]
-                        st_res = requests.get(f"{instance}/streams/{video_id}", timeout=5)
+                        st_res = requests.get(f"{p_instance}/streams/{video_id}", timeout=5)
                         if st_res.status_code == 200:
                             audio_streams = st_res.json().get("audioStreams", [])
                             if audio_streams:
                                 a_url = audio_streams[0].get("url")
-                                audio_res = requests.get(a_url, headers=headers, stream=True, timeout=20)
+                                audio_res = requests.get(a_url, headers=headers, stream=True, timeout=15)
                                 if audio_res.status_code == 200:
                                     with open(save_path, 'wb') as f:
                                         for chunk in audio_res.iter_content(chunk_size=8192):
