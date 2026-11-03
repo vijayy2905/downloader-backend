@@ -2,8 +2,7 @@ import os
 import re
 import zipfile
 import shutil
-import urllib.request
-import json
+import requests
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
 import yt_dlp
@@ -13,46 +12,62 @@ CORS(app)
 
 DOWNLOAD_DIR = "temp_downloads"
 
-def get_spotify_tracks(url):
-    """Extracts song titles and artists from a Spotify link using Spotify's embed API."""
+def get_spotify_track_names(url):
+    """Fetches track metadata using Spotify's public API token endpoint."""
+    track_queries = []
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
     try:
-        # Standardize URL to embed endpoint
+        # Get anonymous Spotify access token
+        token_resp = requests.get('https://open.spotify.com/get_access_token', headers=headers, timeout=10)
+        if token_resp.status_code != 200:
+            return []
+        
+        token_data = token_resp.json()
+        access_token = token_data.get('accessToken')
+        if not access_token:
+            return []
+
+        api_headers = {'Authorization': f'Bearer {access_token}'}
+
+        # Handle Playlist URL
         if "playlist" in url:
             playlist_id = url.split("playlist/")[1].split("?")[0]
-            embed_url = f"https://open.spotify.com/embed/playlist/{playlist_id}"
+            api_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+            resp = requests.get(api_url, headers=api_headers, timeout=10)
+            if resp.status_code == 200:
+                items = resp.json().get('items', [])
+                for item in items:
+                    track = item.get('track')
+                    if track:
+                        artists = ", ".join([a['name'] for a in track['artists']])
+                        track_queries.append(f"{track['name']} {artists}")
+
+        # Handle Single Track URL
         elif "track" in url:
             track_id = url.split("track/")[1].split("?")[0]
-            embed_url = f"https://open.spotify.com/embed/track/{track_id}"
+            api_url = f"https://api.spotify.com/v1/tracks/{track_id}"
+            resp = requests.get(api_url, headers=api_headers, timeout=10)
+            if resp.status_code == 200:
+                track = resp.json()
+                artists = ", ".join([a['name'] for a in track['artists']])
+                track_queries.append(f"{track['name']} {artists}")
+
+        # Handle Album URL
         elif "album" in url:
             album_id = url.split("album/")[1].split("?")[0]
-            embed_url = f"https://open.spotify.com/embed/album/{album_id}"
-        else:
-            return [url] # Fallback to raw query if not a standard Spotify link
-
-        req = urllib.request.Request(embed_url, headers={'User-Agent': 'Mozilla/5.0'})
-        html = urllib.request.urlopen(req).read().decode('utf-8')
-
-        # Parse JSON state inside Spotify embed page
-        match = re.search(r'<script id="session" type="application/json">(.*?)</script>', html)
-        if match:
-            data = json.loads(match.group(1))
-            # Handle tracks in playlist
-            if 'data' in data and 'entity' in data['data']:
-                entity = data['data']['entity']
-                if 'trackList' in entity:
-                    return [f"{track['title']} {track['subtitle']}" for track in entity['trackList']]
-                elif 'title' in entity:
-                    return [f"{entity['title']} {entity.get('subtitle', '')}"]
-
-        # Alternative extraction using meta tags if JSON parse fails
-        title_match = re.findall(r'<meta property="og:title" content="(.*?)"', html)
-        if title_match:
-            return [title_match[0]]
+            api_url = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
+            resp = requests.get(api_url, headers=api_headers, timeout=10)
+            if resp.status_code == 200:
+                items = resp.json().get('items', [])
+                for track in items:
+                    artists = ", ".join([a['name'] for a in track['artists']])
+                    track_queries.append(f"{track['name']} {artists}")
 
     except Exception as e:
-        print("Spotify Metadata Error:", e)
+        print("Spotify API extraction error:", e)
 
-    return [url]
+    return track_queries
 
 
 @app.route('/download', methods=['POST'])
@@ -67,11 +82,10 @@ def handle_download():
         shutil.rmtree(DOWNLOAD_DIR)
     os.makedirs(DOWNLOAD_DIR)
 
-    # Convert Spotify link to searchable query strings
-    search_queries = get_spotify_tracks(url)
+    search_queries = get_spotify_track_names(url)
 
     if not search_queries:
-        return jsonify({'error': 'Could not extract songs from Spotify link'}), 400
+        return jsonify({'error': 'Failed to fetch tracks. Check if playlist is public.'}), 400
 
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -95,14 +109,14 @@ def handle_download():
 
         files = [f for f in os.listdir(DOWNLOAD_DIR) if f.endswith('.mp3')]
         if not files:
-            return jsonify({'error': 'No tracks found or download failed'}), 404
+            return jsonify({'error': 'Audio download failed.'}), 404
 
-        # Single Track -> send MP3 directly
+        # Single Track -> MP3
         if len(files) == 1:
             file_path = os.path.join(DOWNLOAD_DIR, files[0])
             return send_file(file_path, as_attachment=True, download_name=files[0], mimetype='audio/mpeg')
 
-        # Playlist -> package into ZIP
+        # Multiple Tracks -> ZIP
         zip_path = "playlist.zip"
         if os.path.exists(zip_path):
             os.remove(zip_path)
