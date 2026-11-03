@@ -14,7 +14,7 @@ CORS(app)
 DOWNLOAD_DIR = "temp_downloads"
 
 def get_spotify_track_names(url):
-    """Extracts track names directly from Spotify's open embed page without requiring API keys."""
+    """Extracts track names directly from Spotify's embed page."""
     track_queries = []
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -67,7 +67,7 @@ def handle_download():
     if not search_queries:
         return jsonify({'error': 'Failed to fetch tracks from Spotify link.'}), 400
 
-    # Configure yt-dlp to bypass bot checks on cloud servers
+    # Uses SoundCloud search first to avoid YouTube datacenter IP blocking
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s',
@@ -78,21 +78,23 @@ def handle_download():
         }],
         'quiet': True,
         'no_warnings': True,
-        'default_search': 'ytsearch',
-        'noplaylist': True,
-        # Bypasses bot detection by mimicking mobile YouTube clients
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios']
-            }
-        }
+        'default_search': 'scsearch',  # Search SoundCloud to bypass YouTube bot challenge
+        'noplaylist': True
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             for query in search_queries:
-                search_term = f"ytsearch1:{query} audio"
-                ydl.download([search_term])
+                search_term = f"scsearch1:{query}"
+                try:
+                    ydl.download([search_term])
+                except Exception as sc_err:
+                    print("SoundCloud failed, trying YouTube fallback:", sc_err)
+                    yt_opts = dict(ydl_opts)
+                    yt_opts['default_search'] = 'ytsearch'
+                    yt_opts['extractor_args'] = {'youtube': {'player_client': ['mweb', 'tv']}}
+                    with yt_dlp.YoutubeDL(yt_opts) as ydl_yt:
+                        ydl_yt.download([f"ytsearch1:{query} audio"])
 
         files = [f for f in os.listdir(DOWNLOAD_DIR) if f.endswith('.mp3')]
         if not files:
