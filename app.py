@@ -12,12 +12,12 @@ CORS(app)
 
 DOWNLOAD_DIR = "temp_downloads"
 
-# REPLACE THESE TWO LINES WITH YOUR ACTUAL KEYS:
+# PASTE YOUR KEYS HERE:
 SPOTIPY_CLIENT_ID = "b6bb4b60b034493e8d5ca8f4e1791f00"
 SPOTIPY_CLIENT_SECRET = "0e2d99d9b516413883a8dfcd65dfab14"
 
 def get_spotify_track_names(url):
-    """Uses official Spotify API client to fetch tracks securely."""
+    """Uses official Spotify API client to reliably fetch tracks."""
     track_queries = []
     try:
         auth_manager = SpotifyClientCredentials(
@@ -26,7 +26,7 @@ def get_spotify_track_names(url):
         )
         sp = spotipy.Spotify(auth_manager=auth_manager)
 
-                if "playlist" in url:
+        if "playlist" in url:
             playlist_id = url.split("playlist/")[1].split("?")[0]
             results = sp.playlist_tracks(playlist_id)
             tracks = results.get('items', [])
@@ -50,10 +50,10 @@ def get_spotify_track_names(url):
         elif "album" in url:
             album_id = url.split("album/")[1].split("?")[0]
             results = sp.album_tracks(album_id)
-            tracks = results['items']
+            tracks = results.get('items', [])
             while results.get('next'):
                 results = sp.next(results)
-                tracks.extend(results['items'])
+                tracks.extend(results.get('items', []))
 
             for track in tracks:
                 artists = ", ".join([a['name'] for a in track['artists']])
