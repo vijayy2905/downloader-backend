@@ -21,7 +21,6 @@ def get_spotify_track_names(url):
     }
 
     try:
-        # Convert standard URL to embed URL
         clean_url = url.split('?')[0]
         if "embed" not in clean_url:
             clean_url = clean_url.replace("open.spotify.com/", "open.spotify.com/embed/")
@@ -30,18 +29,15 @@ def get_spotify_track_names(url):
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Extract initial data JSON embedded in Spotify page
             script_tag = soup.find('script', id='initial-state') or soup.find('script', id='session')
             if script_tag and script_tag.string:
                 raw_text = script_tag.string
-                # Match track names and artists using regex pattern
                 matches = re.findall(r'"name":"([^"]+)","artists":\[{"name":"([^"]+)"', raw_text)
                 for track, artist in matches:
                     query = f"{track} {artist}"
                     if query not in track_queries:
                         track_queries.append(query)
 
-            # Fallback parsing via HTML title if JSON parsing misses single track
             if not track_queries:
                 title_tag = soup.find('title')
                 if title_tag:
@@ -71,6 +67,7 @@ def handle_download():
     if not search_queries:
         return jsonify({'error': 'Failed to fetch tracks from Spotify link.'}), 400
 
+    # Configure yt-dlp to bypass bot checks on cloud servers
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s',
@@ -82,7 +79,13 @@ def handle_download():
         'quiet': True,
         'no_warnings': True,
         'default_search': 'ytsearch',
-        'noplaylist': True
+        'noplaylist': True,
+        # Bypasses bot detection by mimicking mobile YouTube clients
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios']
+            }
+        }
     }
 
     try:
