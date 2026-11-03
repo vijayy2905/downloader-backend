@@ -1,71 +1,66 @@
 import os
-import re
 import zipfile
 import shutil
-import requests
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
 import yt_dlp
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
 
 app = Flask(__name__)
 CORS(app)
 
 DOWNLOAD_DIR = "temp_downloads"
 
+# REPLACE THESE TWO LINES WITH YOUR ACTUAL KEYS:
+SPOTIPY_CLIENT_ID = "b6bb4b60b034493e8d5ca8f4e1791f00"
+SPOTIPY_CLIENT_SECRET = "0e2d99d9b516413883a8dfcd65dfab14"
+
 def get_spotify_track_names(url):
-    """Fetches track metadata using Spotify's public API token endpoint."""
+    """Uses official Spotify API client to fetch tracks securely."""
     track_queries = []
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-
     try:
-        # Get anonymous Spotify access token
-        token_resp = requests.get('https://open.spotify.com/get_access_token', headers=headers, timeout=10)
-        if token_resp.status_code != 200:
-            return []
-        
-        token_data = token_resp.json()
-        access_token = token_data.get('accessToken')
-        if not access_token:
-            return []
+        auth_manager = SpotifyClientCredentials(
+            client_id=SPOTIPY_CLIENT_ID,
+            client_secret=SPOTIPY_CLIENT_SECRET
+        )
+        sp = spotipy.Spotify(auth_manager=auth_manager)
 
-        api_headers = {'Authorization': f'Bearer {access_token}'}
-
-        # Handle Playlist URL
         if "playlist" in url:
             playlist_id = url.split("playlist/")[1].split("?")[0]
-            api_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
-            resp = requests.get(api_url, headers=api_headers, timeout=10)
-            if resp.status_code == 200:
-                items = resp.json().get('items', [])
-                for item in items:
-                    track = item.get('track')
-                    if track:
-                        artists = ", ".join([a['name'] for a in track['artists']])
-                        track_queries.append(f"{track['name']} {artists}")
-
-        # Handle Single Track URL
-        elif "track" in url:
-            track_id = url.split("track/")[1].split("?")[0]
-            api_url = f"https://api.spotify.com/v1/tracks/{track_id}"
-            resp = requests.get(api_url, headers=api_headers, timeout=10)
-            if resp.status_code == 200:
-                track = resp.json()
-                artists = ", ".join([a['name'] for a in track['artists']])
-                track_queries.append(f"{track['name']} {artists}")
-
-        # Handle Album URL
-        elif "album" in url:
-            album_id = url.split("album/")[1].split("?")[0]
-            api_url = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
-            resp = requests.get(api_url, headers=api_headers, timeout=10)
-            if resp.status_code == 200:
-                items = resp.json().get('items', [])
-                for track in items:
+            results = sp.playlist_items(playlist_id)
+            tracks = results['items']
+            while results.get('next'):
+                results = sp.next(results)
+                tracks.extend(results['items'])
+            
+            for item in tracks:
+                track = item.get('track')
+                if track and track.get('name'):
                     artists = ", ".join([a['name'] for a in track['artists']])
                     track_queries.append(f"{track['name']} {artists}")
 
+        elif "track" in url:
+            track_id = url.split("track/")[1].split("?")[0]
+            track = sp.track(track_id)
+            if track:
+                artists = ", ".join([a['name'] for a in track['artists']])
+                track_queries.append(f"{track['name']} {artists}")
+
+        elif "album" in url:
+            album_id = url.split("album/")[1].split("?")[0]
+            results = sp.album_tracks(album_id)
+            tracks = results['items']
+            while results.get('next'):
+                results = sp.next(results)
+                tracks.extend(results['items'])
+
+            for track in tracks:
+                artists = ", ".join([a['name'] for a in track['artists']])
+                track_queries.append(f"{track['name']} {artists}")
+
     except Exception as e:
-        print("Spotify API extraction error:", e)
+        print("Spotipy API Error:", e)
 
     return track_queries
 
@@ -85,7 +80,7 @@ def handle_download():
     search_queries = get_spotify_track_names(url)
 
     if not search_queries:
-        return jsonify({'error': 'Failed to fetch tracks. Check if playlist is public.'}), 400
+        return jsonify({'error': 'Failed to fetch tracks from Spotify API.'}), 400
 
     ydl_opts = {
         'format': 'bestaudio/best',
