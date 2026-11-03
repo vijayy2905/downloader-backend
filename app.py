@@ -1,66 +1,55 @@
 import os
+import re
 import zipfile
 import shutil
+import requests
+from bs4 import BeautifulSoup
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
 import yt_dlp
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
 
 app = Flask(__name__)
 CORS(app)
 
 DOWNLOAD_DIR = "temp_downloads"
 
-# PASTE YOUR KEYS HERE:
-SPOTIPY_CLIENT_ID = "b6bb4b60b034493e8d5ca8f4e1791f00"
-SPOTIPY_CLIENT_SECRET = "0e2d99d9b516413883a8dfcd65dfab14"
-
 def get_spotify_track_names(url):
-    """Uses official Spotify API client to reliably fetch tracks."""
+    """Extracts track names directly from Spotify's open embed page without requiring API keys."""
     track_queries = []
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
     try:
-        auth_manager = SpotifyClientCredentials(
-            client_id=SPOTIPY_CLIENT_ID,
-            client_secret=SPOTIPY_CLIENT_SECRET
-        )
-        sp = spotipy.Spotify(auth_manager=auth_manager)
+        # Convert standard URL to embed URL
+        clean_url = url.split('?')[0]
+        if "embed" not in clean_url:
+            clean_url = clean_url.replace("open.spotify.com/", "open.spotify.com/embed/")
 
-        if "playlist" in url:
-            playlist_id = url.split("playlist/")[1].split("?")[0]
-            results = sp.playlist_tracks(playlist_id)
-            tracks = results.get('items', [])
-            while results.get('next'):
-                results = sp.next(results)
-                tracks.extend(results.get('items', []))
+        response = requests.get(clean_url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            for item in tracks:
-                track = item.get('track')
-                if track and track.get('name'):
-                    artists = ", ".join([a['name'] for a in track['artists']])
-                    track_queries.append(f"{track['name']} {artists}")
+            # Extract initial data JSON embedded in Spotify page
+            script_tag = soup.find('script', id='initial-state') or soup.find('script', id='session')
+            if script_tag and script_tag.string:
+                raw_text = script_tag.string
+                # Match track names and artists using regex pattern
+                matches = re.findall(r'"name":"([^"]+)","artists":\[{"name":"([^"]+)"', raw_text)
+                for track, artist in matches:
+                    query = f"{track} {artist}"
+                    if query not in track_queries:
+                        track_queries.append(query)
 
-        elif "track" in url:
-            track_id = url.split("track/")[1].split("?")[0]
-            track = sp.track(track_id)
-            if track:
-                artists = ", ".join([a['name'] for a in track['artists']])
-                track_queries.append(f"{track['name']} {artists}")
-
-        elif "album" in url:
-            album_id = url.split("album/")[1].split("?")[0]
-            results = sp.album_tracks(album_id)
-            tracks = results.get('items', [])
-            while results.get('next'):
-                results = sp.next(results)
-                tracks.extend(results.get('items', []))
-
-            for track in tracks:
-                artists = ", ".join([a['name'] for a in track['artists']])
-                track_queries.append(f"{track['name']} {artists}")
+            # Fallback parsing via HTML title if JSON parsing misses single track
+            if not track_queries:
+                title_tag = soup.find('title')
+                if title_tag:
+                    title_text = title_tag.get_text().replace(' | Spotify', '').replace(' - song and lyrics by', '')
+                    track_queries.append(title_text)
 
     except Exception as e:
-        print("Spotipy API Error:", e)
+        print("Embed extraction error:", e)
 
     return track_queries
 
@@ -80,7 +69,7 @@ def handle_download():
     search_queries = get_spotify_track_names(url)
 
     if not search_queries:
-        return jsonify({'error': 'Failed to fetch tracks from Spotify API.'}), 400
+        return jsonify({'error': 'Failed to fetch tracks from Spotify link.'}), 400
 
     ydl_opts = {
         'format': 'bestaudio/best',
